@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>XYZINE</title>
+
+<style>
+
+:root {
+  --bg0: #111;
+  --bg1: #222;
+  --fg0: #eee;
+  --gap: 8px;
+  --min-cell: 144px;
+}
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg0);
+  color: var(--fg0);
+  font-family: "Times New Roman", serif;
+  overflow: hidden;
+}
+.scroller {
+  height: 100%;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+}
+.scroller::-webkit-scrollbar {
+  display: none;
+}
+.spacer {
+  position: relative;
+  width: 100%;
+}
+.layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: var(--gap);
+  box-sizing: border-box;
+}
+.grid {
+  display: grid;
+  gap: var(--gap);
+}
+.grid img {
+  background: var(--bg1);
+  width: 100%;
+  aspect-ratio: 1/1;
+  border-radius: 10%;
+  user-select: none;
+  image-rendering: pixelated;
+}
+
+.header {
+  position: sticky;
+  top: 12px;
+  padding: 12px 24px;
+  border-radius: 64px;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 12px 12px 0px 12px;
+  backdrop-filter: url(#filter) blur(2px);
+}
+  
+</style>
+
+</head>
+
+<body>
+
+  <div class="scroller" id="scroller">
+    <div class="header" id="header">
+      <span style="font-size:32px;font-weight:900;">XYZINE</span>
+      <span style="font-size:16px;font-weight:900;" id="time"></span>
+    </div>
+    <!--div style="display:block;font-size:12px;font-weight:900;margin:0px 12px 0px 12px;">nxrix</div-->
+    <div class="spacer" id="spacer">
+      <div class="layer">
+        <div class="grid" id="grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <svg style="width:0;height:0;">
+    <filter id="filter" color-interpolation-filters="sRGB" filterUnits="objectBoundingBox">   
+      <feTurbulence type="fractalNoise" baseFrequency="0.01 0.01" numOctaves="1" seed="1" stitchTiles="noStitch" x="0%" y="0%" width="100%" height="100%" result="turbulence"/>
+      <feDisplacementMap in="SourceGraphic" in2="turbulence" xChannelSelector="R" yChannelSelector="G" x="0%" y="0%" width="100%" height="100%" result="map">
+        <animate attributeName="scale"
+                 values="256;512;256;"
+                 dur="8s"
+                 repeatCount="indefinite" />
+      </feDisplacementMap>
+    </filter>
+  </svg>
+
+</body>
+
+<script src="./js/xyzine.js"></script>
+<script src="./js/script.js"></script>
+
+<script>
+
+const k = new Date("2021-09-26T10:37:00.000+03:30");
+
+const t = () => {
+  const d = new Date(Date.now() - k);
+  const n = Math.floor(d.getTime() / 1000);
+  time.innerText = Math.floor(n / (60 * 60 * 24)).toString() + " " + [d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()].map(n => n.toString().padStart(2, "0")).join(":");
+}
+t();
+setInterval(t,1000);
+
+const gap = 8;
+const min_cell = 144;
+const buffer_rows = 8;
+const max_index = 0xffff;//Math.floor((Date.now()-k)/(1000*60*60*24))-1+365*32;//365 * 10000;
+
+const scroller = document.getElementById("scroller");
+const spacer = document.getElementById("spacer");
+const grid = document.getElementById("grid");
+
+const get_n_from_url = () => {
+  try {
+    return parseInt(new URL(location.href).searchParams.get("n")) || 0;
+  } catch (e) {
+    return 0;
+  }
+};
+
+let cols = 1;
+let row_h = min_cell + gap;
+let vis_rows = 0;
+let ticking = false;
+let last_n = get_n_from_url();
+
+const rendered = new Map();
+const pending = new Map();
+let busy = false;
+
+const compute_layout = () => {
+  const w = scroller.clientWidth - gap * 2;
+  cols = Math.max(1, Math.floor(w / (min_cell + gap)));
+  const cell = Math.max(min_cell, (scroller.clientWidth - gap * (cols + 1)) / cols);
+  row_h = cell + gap;
+  vis_rows = Math.ceil(scroller.clientHeight / row_h);
+  grid.style.gridTemplateColumns = `repeat(${cols},1fr)`;
+  spacer.style.height = `${Math.ceil(max_index / cols) * row_h}px`;
+};
+
+const compute_range = () => {
+  const st = scroller.scrollTop;
+  const first = Math.ceil(st / row_h);
+  const start_row = Math.max(0, first - buffer_rows);
+  const end_row = first + vis_rows + buffer_rows;
+  return {
+    start_row,
+    start_idx: start_row * cols,
+    end_idx: Math.min(max_index, (end_row + 1) * cols - 1),
+    first_visible: Math.round(st / row_h) * cols
+  };
+};
+
+const set_n_in_url = (n) => {
+  if (last_n === n) return;
+  last_n = n;
+  const u = new URL(location.href);
+  u.searchParams.set("n", String(n));
+  history.replaceState(null, "", u.toString());
+};
+
+const render_range = ({ start_idx, end_idx, start_row }) => {
+  grid.parentElement.style.transform = `translateY(${start_row * row_h}px)`;
+
+  for (const [i, el] of rendered) {
+    if (i < start_idx || i > end_idx) {
+      el.remove();
+      rendered.delete(i);
+      pending.delete(i);
+    }
+  }
+
+  for (let i = start_idx; i <= end_idx; i++) {
+    if (!rendered.has(i) && !pending.has(i)) {
+      const img = document.createElement("img");
+      img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4AWJiYGBgAAAAAP//XRcpzQAAAAZJREFUAwAADwADJDd96QAAAABJRU5ErkJggg==";
+      const pos = i - start_idx;
+      const children = grid.children;
+      if (pos >= children.length) grid.appendChild(img);
+      else grid.insertBefore(img, children[pos]);
+      rendered.set(i, img);
+      pending.set(i, img);
+    }
+  }
+
+  if (!busy) load_next();
+};
+
+/*const load_next = async () => {
+  busy = true;
+  if (pending.size === 0) {
+    busy = false;
+    return;
+  }
+
+  const vis_start = Math.floor(scroller.scrollTop / row_h) * cols;
+  const vis_end = vis_start + Math.ceil(scroller.clientHeight / row_h) * cols;
+
+  let near = null, dist = Infinity;
+  for (const idx of pending.keys()) {
+    const d = idx < vis_start ? vis_start - idx : idx > vis_end ? idx - vis_end : 0;
+    if (d < dist) {
+      dist = d;
+      near = idx;
+    }
+  }
+
+  if (near === null) {
+    busy = false;
+    return;
+  }
+
+  const el = pending.get(near);
+  pending.delete(near);
+  el.src = render(near,max_index-8+1);
+
+  await new Promise(r => requestAnimationFrame(r));
+  load_next();
+};*/
+
+/*let lastLoaded = null;
+const load_next = async () => {
+  if (busy) return;
+  busy = true;
+  if (pending.size === 0) {
+    busy = false;
+    return;
+  }
+  const vis_start = Math.floor(scroller.scrollTop / row_h) * cols;
+  const vis_end = vis_start + Math.ceil(scroller.clientHeight / row_h) * cols;
+  const vis_center = Math.floor((vis_start + vis_end) / 2);
+  const start = Math.max(0, vis_start);
+  const end = Math.min(max_index + 1, vis_end);
+  if (start >= end) {
+    busy = false;
+    return;
+  }
+  const mid = Math.floor((start + end) / 2);
+  const countLoadedIn = (s, e) => {
+    let total = 0;
+    let pendingCnt = 0;
+    for (let i = s; i < e; i++) {
+      if (i < 0 || i > max_index) continue;
+      total++;
+      if (pending.has(i)) pendingCnt++;
+    }
+    return total - pendingCnt;
+  };
+  const aLoaded = countLoadedIn(start, mid);
+  const bLoaded = countLoadedIn(mid, end);
+  let forward;
+  if (aLoaded > bLoaded) forward = true;
+  else if (bLoaded > aLoaded) forward = false;
+  else {
+    if (typeof lastLoaded === 'number') forward = lastLoaded < vis_center;
+    else forward = true;
+  }
+  let next;
+  if (forward) {
+    next = Array.from(pending.keys()).find(i => i >= start && i < end);
+  } else {
+    const pendingIndices = Array.from(pending.keys()).filter(i => i >= start && i < end);
+    next = pendingIndices.length ? pendingIndices[pendingIndices.length - 1] : undefined;
+  }
+  if (next === undefined) {
+    busy = false;
+    return;
+  }
+  const el = pending.get(next);
+  pending.delete(next);
+  el.src = render(next, max_index - 8 + 1);
+  lastLoaded = next;
+  await new Promise(r => requestAnimationFrame(r));
+  busy = false;
+  load_next();
+};*/
+
+const load_next = async () => {
+  busy = true;
+  if (pending.size === 0) {
+    busy = false;
+    return;
+  }
+  const vis_start = Math.floor(scroller.scrollTop / row_h) * cols;
+  const vis_end = vis_start + Math.ceil(scroller.clientHeight / row_h) * cols;
+  const vis_center = Math.floor((vis_start + vis_end) / 2) - (1 - (cols % 2)) * cols / 2;
+  let nextIndex = null;
+  let minDist = Infinity;
+  for (const idx of pending.keys()) {
+    if (idx >= vis_start && idx <= vis_end) {
+      const dist = Math.abs(idx - vis_center);
+      if (dist < minDist) {
+        minDist = dist;
+        nextIndex = idx;
+      }
+    }
+  }
+  if (nextIndex === null) {
+    for (const idx of pending.keys()) {
+      const dist = idx < vis_start ? vis_start - idx : idx - vis_end;
+      if (dist < minDist) {
+        minDist = dist;
+        nextIndex = idx;
+      }
+    }
+  }
+  if (nextIndex === null) {
+    busy = false;
+    return;
+  }
+  const el = pending.get(nextIndex);
+  pending.delete(nextIndex);
+  el.src = render(nextIndex,Math.floor((Date.now()-k)/(1000*60*60*24)));// max_index - 365*32 + 1);
+  await new Promise(r => requestAnimationFrame(r));
+  busy = false;
+  load_next();
+};
+
+const scroll_to = (n) => {
+  const target = Math.floor(Math.min(Math.floor(n/cols)*row_h,spacer.clientHeight-scroller.clientHeight)) + header.clientHeight + 12;
+  scroller.scrollTop = Math.max(0, target);
+};
+
+const on_scroll_or_resize = () => {
+  if (ticking) return;
+  ticking = true;
+  //requestAnimationFrame(() => {
+    const range = compute_range();
+    render_range(range);
+    set_n_in_url(range.first_visible);
+    ticking = false;
+  //});
+};
+
+const init = () => {
+  compute_layout();
+  const init_n = get_n_from_url();
+  //requestAnimationFrame(() => {
+    compute_layout();
+    if (init_n!==0) scroll_to(init_n);
+    on_scroll_or_resize();
+  //});
+};
+
+window.addEventListener("scroll",() => {
+  on_scroll_or_resize();
+});
+
+["resize", "orientationchange"].forEach(ev => {
+  /*window.addEventListener(ev, () => requestAnimationFrame(() => {
+    compute_layout();
+    scroll_to(get_n_from_url() || last_n || 0);
+    on_scroll_or_resize();
+  }));*/
+  window.addEventListener(ev, () => {
+    const old_cols = cols;
+    compute_layout();
+    if (cols!==old_cols) scroll_to(get_n_from_url() || last_n || 0);
+    on_scroll_or_resize();
+  });
+});
+
+scroller.addEventListener("scroll", on_scroll_or_resize);
+window.addEventListener("load", init);
+
+</script>
+
+</html>
