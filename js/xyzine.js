@@ -55,7 +55,7 @@ class XYZINE {
       const freq = 12;
       if (this.rnd()<1/freq) this.val.push("Math.floor(Math.sqrt(x*x+y*y))");
       if (this.rnd()<1/freq) this.val.push("(x*x+y*y)");
-      if (this.rnd()<1/freq) this.val.push("Math.floor(Math.sqrt((x-px)^2+(y-py)^2))");
+      if (this.rnd()<1/freq) this.val.push("Math.floor(Math.sqrt((x-px)**2+(y-py)**2))");
       if (this.rnd()<1/freq) this.val.push("Math.max(Math.abs(x),Math.abs(y))");
       if (this.rnd()<1/freq) this.val.push("Math.min(Math.abs(x),Math.abs(y))");
       if (this.rnd()<1/freq) this.val.push("(Math.abs(x)+Math.abs(y))");
